@@ -4,23 +4,15 @@ import numpy as np
 from datetime import datetime
 import plotly.express as px
 
-st.set_page_config(page_title="Enterprise RFM Intelligence Dashboard", layout="wide")
+st.set_page_config(page_title="Customer RFM Intelligence Dashboard", layout="wide")
 
-st.title("📊 Enterprise Customer RFM & Product Intelligence Dashboard")
+st.title("📊 Customer RFM Intelligence Dashboard")
+st.markdown("Percentile-based RFM Segmentation with Business Insights")
 
-st.markdown("""
-This dashboard provides:
-• Percentile-based RFM segmentation  
-• Product intelligence by category  
-• Revenue projections  
-• Timeframe clarity  
-""")
-
-# ---------------------------------------------------
-# FILE UPLOAD
-# ---------------------------------------------------
-
-uploaded_file = st.file_uploader("Upload Order Dataset", type=["csv"])
+# -----------------------------
+# File Upload
+# -----------------------------
+uploaded_file = st.file_uploader("Upload Order Data CSV", type=["csv"])
 
 if uploaded_file is not None:
 
@@ -30,54 +22,43 @@ if uploaded_file is not None:
         "user_id",
         "order_id",
         "order_date",
-        "category",
         "product_name",
-        "quantity",
         "order_value",
         "discount_given"
     ]
 
-    # Dataset Structure Validation
-    missing_cols = [col for col in required_cols if col not in df.columns]
-
-    if missing_cols:
-        st.error(f"Dataset must include columns: {required_cols}")
+    if not all(col in df.columns for col in required_cols):
+        st.error("CSV must contain required columns.")
         st.stop()
 
     df["order_date"] = pd.to_datetime(df["order_date"])
 
-    # ---------------------------------------------------
-    # TIMEFRAME DISPLAY
-    # ---------------------------------------------------
-
-    data_start = df["order_date"].min()
-    data_end = df["order_date"].max()
-
-    st.subheader("📅 Data Timeframe")
-
-    col1, col2 = st.columns(2)
-    col1.metric("Data Start Date", data_start.date())
-    col2.metric("Data End Date", data_end.date())
-
-    # ---------------------------------------------------
-    # ANALYSIS DATE SELECTION
-    # ---------------------------------------------------
+    # -----------------------------
+    # Analysis Date Selection
+    # -----------------------------
+    st.subheader("📅 Select Analysis Date")
 
     analysis_date = st.date_input(
-        "Select Analysis Date",
-        value=datetime.today(),  # Allow today's date
-        min_value=data_start,
+        "Choose a date to calculate Recency",
+        value=df["order_date"].max(),
+        min_value=df["order_date"].min(),
         max_value=datetime.today()
     )
 
     snapshot_date = pd.to_datetime(analysis_date)
 
-    st.info(f"Recency calculated using analysis date: {snapshot_date.date()}")
+    st.info(
+        f"Recency is calculated as difference between {snapshot_date.date()} "
+        f"and each customer's last order date."
+    )
 
-    # ---------------------------------------------------
-    # RFM CALCULATION
-    # ---------------------------------------------------
+    if snapshot_date < df["order_date"].min():
+        st.error("Analysis date cannot be earlier than dataset start date.")
+        st.stop()
 
+    # -----------------------------
+    # RFM Calculation
+    # -----------------------------
     rfm = df.groupby("user_id").agg({
         "order_date": lambda x: (snapshot_date - x.max()).days,
         "order_id": "count",
@@ -86,10 +67,20 @@ if uploaded_file is not None:
 
     rfm.columns = ["user_id", "Recency", "Frequency", "Monetary"]
 
-    # Percentile Scoring
+    # -----------------------------
+    # Percentile-Based Scoring
+    # -----------------------------
     rfm["R_Score"] = pd.qcut(rfm["Recency"], 5, labels=[5,4,3,2,1]).astype(int)
-    rfm["F_Score"] = pd.qcut(rfm["Frequency"].rank(method="first"), 5, labels=[1,2,3,4,5]).astype(int)
-    rfm["M_Score"] = pd.qcut(rfm["Monetary"].rank(method="first"), 5, labels=[1,2,3,4,5]).astype(int)
+    rfm["F_Score"] = pd.qcut(
+        rfm["Frequency"].rank(method="first"),
+        5,
+        labels=[1,2,3,4,5]
+    ).astype(int)
+    rfm["M_Score"] = pd.qcut(
+        rfm["Monetary"].rank(method="first"),
+        5,
+        labels=[1,2,3,4,5]
+    ).astype(int)
 
     rfm["RFM_Score"] = (
         rfm["R_Score"].astype(str) +
@@ -97,7 +88,9 @@ if uploaded_file is not None:
         rfm["M_Score"].astype(str)
     )
 
-    # Segmentation
+    # -----------------------------
+    # Segmentation Logic
+    # -----------------------------
     def segment(row):
         if row["R_Score"] >= 4 and row["F_Score"] >= 4 and row["M_Score"] >= 4:
             return "Champion Customer"
@@ -112,47 +105,58 @@ if uploaded_file is not None:
 
     rfm["Segment"] = rfm.apply(segment, axis=1)
 
-    # ---------------------------------------------------
-    # KPI SECTION
-    # ---------------------------------------------------
+    # -----------------------------
+    # Sidebar Filter
+    # -----------------------------
+    st.sidebar.header("Filters")
+    segment_filter = st.sidebar.multiselect(
+        "Select Segment",
+        options=rfm["Segment"].unique(),
+        default=rfm["Segment"].unique()
+    )
 
-    st.subheader("📌 Key RFM KPIs")
+    rfm_filtered = rfm[rfm["Segment"].isin(segment_filter)]
 
-    total_customers = len(rfm)
-    avg_recency = round(rfm["Recency"].mean(), 1)
-    avg_frequency = round(rfm["Frequency"].mean(), 1)
-    avg_monetary = round(rfm["Monetary"].mean(), 0)
+    # -----------------------------
+    # KPI Section
+    # -----------------------------
+    total_customers = len(rfm_filtered)
+    active_customers = sum(rfm_filtered["Recency"] <= 30)
+    avg_recency = round(rfm_filtered["Recency"].mean(), 1)
+    avg_frequency = round(rfm_filtered["Frequency"].mean(), 1)
+    avg_monetary = round(rfm_filtered["Monetary"].mean(), 0)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     col1.metric("Total Customers", total_customers)
-    col2.metric("Avg Recency (Days)", avg_recency)
-    col3.metric("Avg Frequency", avg_frequency)
-    col4.metric("Avg Monetary (₹)", avg_monetary)
+    col2.metric("Active Customers (≤30 days)", active_customers)
+    col3.metric("Avg Recency (days)", avg_recency)
+    col4.metric("Avg Frequency", avg_frequency)
+    col5.metric("Avg Monetary (₹)", avg_monetary)
 
-    # ---------------------------------------------------
-    # MOST SOLD PRODUCT PER CATEGORY
-    # ---------------------------------------------------
+    st.markdown("---")
 
-    st.subheader("🛒 Most Sold Product by Category")
+    # -----------------------------
+    # Revenue Contribution by Segment
+    # -----------------------------
+    seg_revenue = rfm_filtered.groupby("Segment")["Monetary"].sum().reset_index()
+    seg_revenue["Revenue_%"] = (
+        seg_revenue["Monetary"] /
+        seg_revenue["Monetary"].sum() * 100
+    )
 
-    category_sales = df.groupby(
-        ["category", "product_name"]
-    ).agg({
-        "quantity": "sum",
-        "order_value": "sum"
-    }).reset_index()
+    fig_rev = px.bar(
+        seg_revenue,
+        x="Segment",
+        y="Monetary",
+        title="Revenue Contribution by Segment"
+    )
 
-    top_products = category_sales.loc[
-        category_sales.groupby("category")["quantity"].idxmax()
-    ]
+    st.plotly_chart(fig_rev, use_container_width=True)
 
-    st.dataframe(top_products, use_container_width=True)
-
-    # ---------------------------------------------------
-    # REVENUE TREND
-    # ---------------------------------------------------
-
+    # -----------------------------
+    # Monthly Revenue Trend
+    # -----------------------------
     monthly = df.groupby(
         pd.Grouper(key="order_date", freq="M")
     )["order_value"].sum().reset_index()
@@ -166,53 +170,75 @@ if uploaded_file is not None:
 
     st.plotly_chart(fig_line, use_container_width=True)
 
-    # ---------------------------------------------------
-    # REVENUE PROJECTION
-    # ---------------------------------------------------
-
-    st.subheader("📈 Revenue Projection (Trend Continuation)")
-
-    monthly["Month_Number"] = range(1, len(monthly) + 1)
-
-    slope, intercept = np.polyfit(monthly["Month_Number"], monthly["order_value"], 1)
-
-    next_month = len(monthly) + 1
-    projected_revenue = slope * next_month + intercept
-
-    st.metric("Projected Next Month Revenue (₹)", f"{projected_revenue:,.0f}")
-
-    # ---------------------------------------------------
-    # SEGMENT REVENUE CONTRIBUTION
-    # ---------------------------------------------------
-
-    st.subheader("💰 Revenue Contribution by Segment")
-
-    seg_revenue = rfm.merge(
-        df.groupby("user_id")["order_value"].sum().reset_index(),
-        on="user_id"
-    )
-
-    seg_rev_summary = seg_revenue.groupby("Segment")["order_value"].sum().reset_index()
-
-    fig_seg = px.bar(
-        seg_rev_summary,
-        x="Segment",
-        y="order_value",
-        title="Revenue by Customer Segment"
-    )
-
-    st.plotly_chart(fig_seg, use_container_width=True)
-
-    # ---------------------------------------------------
-    # RFM DISTRIBUTION
-    # ---------------------------------------------------
-
-    st.subheader("📊 RFM Score Distribution")
+    # -----------------------------
+    # RFM Score Distribution
+    # -----------------------------
+    st.subheader("RFM Score Distribution")
 
     colA, colB, colC = st.columns(3)
 
-    colA.plotly_chart(px.histogram(rfm, x="R_Score", title="Recency Score"), use_container_width=True)
-    colB.plotly_chart(px.histogram(rfm, x="F_Score", title="Frequency Score"), use_container_width=True)
-    colC.plotly_chart(px.histogram(rfm, x="M_Score", title="Monetary Score"), use_container_width=True)
+    colA.plotly_chart(
+        px.histogram(rfm_filtered, x="R_Score",
+                     title="Recency Score Distribution"),
+        use_container_width=True
+    )
 
-    st.caption(f"Dashboard generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    colB.plotly_chart(
+        px.histogram(rfm_filtered, x="F_Score",
+                     title="Frequency Score Distribution"),
+        use_container_width=True
+    )
+
+    colC.plotly_chart(
+        px.histogram(rfm_filtered, x="M_Score",
+                     title="Monetary Score Distribution"),
+        use_container_width=True
+    )
+
+    # -----------------------------
+    # Preferred Product per Segment
+    # -----------------------------
+    preferred = (
+        df.groupby(["user_id", "product_name"])
+        .size()
+        .reset_index(name="count")
+    )
+
+    preferred = preferred.loc[
+        preferred.groupby("user_id")["count"].idxmax()
+    ]
+
+    rfm_pref = rfm_filtered.merge(
+        preferred[["user_id", "product_name"]],
+        on="user_id",
+        how="left"
+    )
+
+    seg_product = (
+        rfm_pref.groupby(["Segment", "product_name"])
+        .size()
+        .reset_index(name="count")
+    )
+
+    seg_product = seg_product.loc[
+        seg_product.groupby("Segment")["count"].idxmax()
+    ]
+
+    st.subheader("Most Preferred Product by Segment")
+    st.dataframe(seg_product, use_container_width=True)
+
+    # -----------------------------
+    # Final RFM Table
+    # -----------------------------
+    st.subheader("Customer RFM Table")
+    st.dataframe(
+        rfm_filtered.sort_values("RFM_Score", ascending=False),
+        use_container_width=True
+    )
+
+    st.caption(
+        f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    st.caption(
+        "Recency calculated based on selected analysis date."
+    )
